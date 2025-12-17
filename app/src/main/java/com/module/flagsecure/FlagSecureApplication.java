@@ -12,7 +12,6 @@ import android.view.WindowManager;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import java.lang.ref.WeakReference;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -29,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class FlagSecureApplication extends Application {
 
     @NonNull
-    private final Map<Integer, WeakReference<View>> overlayViews = new ConcurrentHashMap<>();
+    private final Map<Integer, View> overlayViews = new ConcurrentHashMap<>();
     
     private volatile boolean screenshotProtectionEnabled = true;
     private volatile boolean backgroundProtectionEnabled = true;
@@ -61,6 +60,10 @@ public class FlagSecureApplication extends Application {
         return backgroundProtectionEnabled;
     }
 
+    private int getActivityKey(@NonNull Activity activity) {
+        return System.identityHashCode(activity);
+    }
+
     private class SecurityLifecycleCallbacks implements ActivityLifecycleCallbacks {
 
         @Override
@@ -68,24 +71,23 @@ public class FlagSecureApplication extends Application {
             if (screenshotProtectionEnabled) {
                 applyFlagSecure(activity);
             }
-            
-            if (backgroundProtectionEnabled) {
-                createOverlay(activity);
-            }
         }
 
         @Override
         public void onActivityStarted(@NonNull Activity activity) {
+            if (backgroundProtectionEnabled && !overlayViews.containsKey(getActivityKey(activity))) {
+                attachOverlay(activity);
+            }
         }
 
         @Override
         public void onActivityResumed(@NonNull Activity activity) {
-            hideOverlay(activity);
+            setOverlayVisibility(activity, false);
         }
 
         @Override
         public void onActivityPaused(@NonNull Activity activity) {
-            showOverlay(activity);
+            setOverlayVisibility(activity, true);
         }
 
         @Override
@@ -98,39 +100,25 @@ public class FlagSecureApplication extends Application {
 
         @Override
         public void onActivityDestroyed(@NonNull Activity activity) {
-            overlayViews.remove(activity.hashCode());
+            int key = getActivityKey(activity);
+            View overlay = overlayViews.remove(key);
+            if (overlay != null && overlay.getParent() != null) {
+                ((ViewGroup) overlay.getParent()).removeView(overlay);
+            }
         }
     }
 
     private void applyFlagSecure(@NonNull Activity activity) {
         Window window = activity.getWindow();
-        if (window != null) {
-            window.setFlags(
-                    WindowManager.LayoutParams.FLAG_SECURE,
-                    WindowManager.LayoutParams.FLAG_SECURE
-            );
-        }
+        if (window == null) return;
+        
+        window.setFlags(
+                WindowManager.LayoutParams.FLAG_SECURE,
+                WindowManager.LayoutParams.FLAG_SECURE
+        );
     }
 
-    private void createOverlay(@NonNull Activity activity) {
-        View overlay = new View(activity);
-        overlay.setBackgroundColor(overlayColor);
-        overlay.setVisibility(View.GONE);
-        overlayViews.put(activity.hashCode(), new WeakReference<>(overlay));
-    }
-
-    private void showOverlay(@NonNull Activity activity) {
-        if (!backgroundProtectionEnabled) return;
-        
-        WeakReference<View> overlayRef = overlayViews.get(activity.hashCode());
-        if (overlayRef == null) return;
-        
-        View overlay = overlayRef.get();
-        if (overlay == null) {
-            overlayViews.remove(activity.hashCode());
-            return;
-        }
-
+    private void attachOverlay(@NonNull Activity activity) {
         Window window = activity.getWindow();
         if (window == null) return;
         
@@ -140,26 +128,29 @@ public class FlagSecureApplication extends Application {
         ViewGroup rootView = decorView.findViewById(android.R.id.content);
         if (rootView == null) return;
 
-        if (overlay.getParent() == null) {
-            rootView.addView(overlay, new ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-            ));
-        }
-        overlay.setVisibility(View.VISIBLE);
-        overlay.bringToFront();
+        View overlay = new View(activity);
+        overlay.setBackgroundColor(overlayColor);
+        overlay.setVisibility(View.GONE);
+        
+        rootView.addView(overlay, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        
+        overlayViews.put(getActivityKey(activity), overlay);
     }
 
-    private void hideOverlay(@NonNull Activity activity) {
-        WeakReference<View> overlayRef = overlayViews.get(activity.hashCode());
-        if (overlayRef == null) return;
+    private void setOverlayVisibility(@NonNull Activity activity, boolean visible) {
+        if (!backgroundProtectionEnabled) return;
         
-        View overlay = overlayRef.get();
-        if (overlay == null) {
-            overlayViews.remove(activity.hashCode());
-            return;
+        View overlay = overlayViews.get(getActivityKey(activity));
+        if (overlay == null) return;
+        
+        if (visible) {
+            overlay.bringToFront();
+            overlay.setVisibility(View.VISIBLE);
+        } else {
+            overlay.setVisibility(View.GONE);
         }
-        
-        overlay.setVisibility(View.GONE);
     }
 }
